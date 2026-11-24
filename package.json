@@ -3,14 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.9.0"
   },
   "scripts": {
+    "local:build": "vite build --config vite.local.config.mjs",
+    "local:start": "node local/server.mjs",
+    "local:test": "node --test scripts/check-local.mjs scripts/check-ai.mjs scripts/check-answer-options.mjs scripts/check-clients.mjs",
     "dev": "node scripts/run-framework.mjs dev",
     "build": "node scripts/run-framework.mjs build",
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "test": "node --test scripts/check-questions.mjs scripts/check-local.mjs scripts/check-ai.mjs scripts/check-answer-options.mjs scripts/check-clients.mjs",
+    "typecheck": "tsc --noEmit",
+    "privacy:check": "node scripts/check-repository.mjs",
+    "clients:install": "node scripts/install-ai-clients.mjs",
+    "local:open": "node local/launcher.mjs",
+    "local:stop": "node local/launcher.mjs --stop"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -23,9 +32,12 @@
     "drizzle-orm": "0.45.2",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
+    "jose": "^6.2.17",
     "lucide-react": "^1.31.0",
+    "mammoth": "^1.9.0",
     "next": "16.3.4",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "4.10.38",
     "radix-ui": "^1.6.7",
     "react": "19.2.6",
     "react-day-picker": "^10.0.1",
@@ -36,9 +48,7 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
     "vaul": "^1.1.2",
-    "zod": "^3.25.76",
-    "pdfjs-dist": "4.10.38",
-    "mammoth": "^1.9.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
