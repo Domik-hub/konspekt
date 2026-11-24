@@ -1,0 +1,192 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { ArrowDownToLine, ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleHelp, Clock3, FileText, FolderOpen, GraduationCap, Layers3, Loader2, LockKeyhole, Menu, Plus, Search, Settings2, ShieldCheck, Sparkles, Target, Trash2, TrendingUp, Upload, X, Zap } from "lucide-react";
+import { DEMO_TEXT, generateQuestions, wordCount, type Attempt, type Difficulty, type Format, type Material, type Question, type StudySet } from "../lib/questions";
+import { readLecture } from "../lib/read-file";
+
+type View = "create" | "library" | "progress" | "set" | "quiz" | "cards";
+const STORE = "konspekt-study-v1";
+const difficultyNames = { easy: "Базовый", medium: "Средний", hard: "Продвинутый" };
+const dateLabel = (date: string) => new Date(date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+
+function PaperArt() {
+  return <div className="paper-art" aria-hidden="true"><div className="art-orbit"/><div className="paper paper-back"><span/><span/><span/></div><div className="paper paper-front"><div className="paper-icon"><FileText size={24}/></div><span className="paper-line long"/><span className="paper-line"/><span className="paper-line short"/><div className="paper-check"><Check size={13}/><span/></div></div><span className="art-spark"><Sparkles size={19}/></span><span className="art-dot dot-one"/><span className="art-dot dot-two"/><span className="art-plus">+</span></div>;
+}
+
+export default function StudyApp() {
+  const [view, setView] = useState<View>("create");
+  const [tab, setTab] = useState<"files" | "text">("files");
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [count, setCount] = useState(10);
+  const [difficulty, setDifficulty] = useState<Difficulty>("medium");
+  const [format, setFormat] = useState<Format>("mixed");
+  const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [sets, setSets] = useState<StudySet[]>([]);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [active, setActive] = useState<StudySet | null>(null);
+  const [search, setSearch] = useState("");
+  const [showAnswers, setShowAnswers] = useState(false);
+  const [help, setHelp] = useState(false);
+  const [sidebar, setSidebar] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const ready = (tab === "text" ? text.trim().length >= 80 : materials.length > 0) && !loading && !generating;
+  const totalWords = wordCount(tab === "text" ? text : materials.map(m => m.text).join(" "));
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+      if (saved) {
+        if (Array.isArray(saved.sets)) setSets(saved.sets.filter((s: StudySet) => s.id && typeof s.title === "string" && Array.isArray(s.questions) && s.questions.every(q => q.id && q.prompt && q.answer && q.source && Array.isArray(q.options))).slice(0, 20));
+        if (Array.isArray(saved.attempts)) setAttempts(saved.attempts.filter((a: Attempt) => a.id && a.total > 0 && a.at).slice(0, 100));
+      }
+    } catch { setNotice("Не удалось прочитать сохранённые материалы. Новая тренировка всё равно доступна."); }
+  }, []);
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 6500); return () => clearTimeout(timer); }, [notice]);
+
+  function persist(newSets: StudySet[], newAttempts: Attempt[]) {
+    try { localStorage.setItem(STORE, JSON.stringify({ sets: newSets, attempts: newAttempts })); }
+    catch { setNotice("Память браузера заполнена. Этот набор доступен до закрытия страницы — скачайте вопросы, чтобы сохранить их."); }
+  }
+  function navigate(next: View) { setView(next); setSidebar(false); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  function openSet(set: StudySet) { setActive(set); setShowAnswers(false); navigate("set"); }
+
+  async function upload(files: FileList | File[]) {
+    if (loading) return;
+    setError("");
+    const incoming = Array.from(files);
+    if (incoming.length + materials.length > 5) { setError("Можно добавить до 5 файлов в один набор."); return; }
+    setLoading(true);
+    try {
+      const read: Material[] = [];
+      for (const file of incoming) read.push(await readLecture(file));
+      const combined = [...materials, ...read];
+      if (combined.reduce((n,m) => n + m.text.length, 0) > 120000) throw new Error("Общий объём больше 120 000 символов. Создайте отдельные наборы для разных лекций.");
+      setMaterials(combined);
+    } catch (e) { setError(e instanceof Error ? e.message : "Не удалось прочитать файл. Попробуйте вставить его текст."); }
+    finally { setLoading(false); if (fileInput.current) fileInput.current.value = ""; }
+  }
+
+  async function generate(demo = false) {
+    setError(""); setGenerating(true);
+    // Give the progress state a paint before synchronous text analysis.
+    await new Promise(resolve => setTimeout(resolve, 150));
+    try {
+      const source: Material[] = demo ? [{ name: "Как работает память · пример", text: DEMO_TEXT }] : tab === "files" ? materials : [{ name: title.trim() || "Текст лекции", text }];
+      if (source.some(m => m.text.length > 120000)) throw new Error("Сократите материал до 120 000 символов.");
+      const questions = generateQuestions(source, demo ? 5 : count, demo ? "mixed" : format, demo ? "medium" : difficulty);
+      const set: StudySet = { id: crypto.randomUUID(), title: demo ? "Как работает память" : title.trim() || (tab === "files" ? materials[0]?.name.replace(/\.[^.]+$/, "") : text.trim().split(/\n|[.!?]/)[0].slice(0, 65)) || "Новая лекция", createdAt: new Date().toISOString(), questions, words: source.reduce((n,m) => n + wordCount(m.text), 0), difficulty: demo ? "medium" : difficulty, sourceNames: source.map(m=>m.name) };
+      const updated = [set, ...sets].slice(0, 20);
+      setSets(updated); persist(updated, attempts); openSet(set);
+      if (!demo && questions.length < count) setNotice(`Получилось ${questions.length} вопросов без повторов. Для ${count} вопросов добавьте больше материала.`);
+      else if (!demo && format === "choice" && questions.some(q => q.kind === "open")) setNotice("Для части вопросов мало разных вариантов в тексте — они добавлены как открытые.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Не получилось создать вопросы. Проверьте текст лекции."); }
+    finally { setGenerating(false); }
+  }
+
+  function finish(correct: number, total: number) {
+    if (!active) return;
+    const updated = [{ id: crypto.randomUUID(), setId: active.id, title: active.title, at: new Date().toISOString(), correct, total }, ...attempts].slice(0, 100);
+    setAttempts(updated); persist(sets, updated);
+  }
+  function deleteSet() {
+    const updated = sets.filter(s => s.id !== deleteId);
+    const scores = attempts.filter(a => a.setId !== deleteId);
+    setSets(updated); setAttempts(scores); persist(updated, scores); setDeleteId(null); setNotice("Набор удалён с этого устройства.");
+  }
+  function download() {
+    if (!active) return;
+    const content = `${active.title}\n${difficultyNames[active.difficulty]} · ${active.questions.length} вопросов\n\n` + active.questions.map((q,i) => `${i+1}. ${q.prompt}\n${q.options.map((o,j)=>`${"АБВГ"[j]}. ${o}`).join("\n")}${showAnswers ? `\nОтвет: ${q.answer}\nИз лекции: ${q.source}\nИсточник: ${q.sourceName}` : ""}`).join("\n\n");
+    const blob = new Blob(["\uFEFF", content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `${active.title.replace(/[^\p{L}\p{N} -]/gu, "").slice(0,60)} — вопросы.txt`; anchor.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  }
+  const totalAnswered = attempts.reduce((n,a) => n+a.total, 0);
+  const totalCorrect = attempts.reduce((n,a)=>n+a.correct, 0);
+  const activeDays = new Set(attempts.map(a=>new Date(a.at).toLocaleDateString())).size;
+  const section = view === "create" ? "Новый набор" : view === "library" ? "Мои материалы" : view === "progress" ? "Мой прогресс" : view === "cards" ? "Карточки" : view === "quiz" ? "Самопроверка" : "Вопросы по лекции";
+
+  return <div className="app-shell">
+    {sidebar && <button className="sidebar-scrim" aria-label="Закрыть меню" onClick={()=>setSidebar(false)}/>}
+    <aside className={`sidebar ${sidebar ? "mobile-open" : ""}`}>
+      <button className="brand" onClick={()=>navigate("create")} aria-label="Конспект — главная"><span className="brand-mark"><span/><span/></span><span>конспект<span className="brand-dot">.</span></span></button>
+      <div className="workspace-label">ТВОЁ ПРОСТРАНСТВО</div>
+      <nav className="main-nav" aria-label="Основное меню">
+        <button className={view === "create" ? "active" : ""} onClick={()=>navigate("create")}><Sparkles size={19}/><span>Создать вопросы</span><Plus size={16}/></button>
+        <button className={view === "library" || ["set","quiz","cards"].includes(view) ? "active" : ""} onClick={()=>navigate("library")}><FolderOpen size={19}/><span>Мои материалы</span>{sets.length > 0 && <small>{sets.length}</small>}</button>
+        <button className={view === "progress" ? "active" : ""} onClick={()=>navigate("progress")}><TrendingUp size={19}/><span>Мой прогресс</span></button>
+      </nav>
+      <div className="sidebar-tip"><div className="tip-orb"><Zap size={21}/></div><strong>По чуть-чуть.<br/>Каждый день.</strong><p>Один небольшой тест —<br/>ещё один шаг к знаниям.</p><div className="tip-line"><span/><span/><span/><span/><span/></div></div>
+      <div className="sidebar-bottom"><button className="help-link" onClick={()=>setHelp(true)}><CircleHelp size={18}/>Как это работает</button><div className="profile"><span className="avatar"><GraduationCap size={21}/></span><div><strong>Личное пространство</strong><span>Учись в своём темпе</span></div><span className="online-dot"/></div></div>
+    </aside>
+    <div className="main-shell">
+      <header className="topbar"><div className="breadcrumb"><button className="mobile-menu icon-btn" aria-label="Открыть меню" onClick={()=>setSidebar(true)}><Menu size={21}/></button><span>Рабочее пространство</span><ChevronRight size={14}/><strong>{section}</strong></div><div className="local-badge"><span/>Сохранение на устройстве</div><span className="top-avatar">К</span></header>
+      <main className={`page page-${view}`}>
+        {view === "create" && <>
+          <div className="intro"><div className="eyebrow"><span/>МЕНЬШЕ ПЕРЕЧИТЫВАЙ. БОЛЬШЕ ПОНИМАЙ.</div><h1>Из лекций <span className="title-arrow">↗</span> в знания.</h1><p>Загрузи материал — получи вопросы.<br className="mobile-break"/> Проверь себя и запомни главное.</p><div className="intro-doodle" aria-hidden="true"><span>твоя учёба,<br/>твой ритм</span><svg width="66" height="40" viewBox="0 0 66 40"><path d="M4 5c15 30 38 30 54 4m-13 4 15-8-2 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></div></div>
+          <div className="creator-grid">
+            <section className="card material-card"><div className="card-heading"><div className="step-num">01</div><h2>Добавь материал</h2><span className="subtle">С этого всё начинается</span></div>
+              <div className="input-tabs" role="tablist" aria-label="Способ добавления"><button role="tab" aria-selected={tab === "files"} className={tab === "files" ? "selected" : ""} onClick={()=>{setTab("files");setError("");}}><Upload size={17}/>Загрузить файл</button><button role="tab" aria-selected={tab === "text"} className={tab === "text" ? "selected" : ""} onClick={()=>{setTab("text");setError("");}}><FileText size={17}/>Вставить текст</button></div>
+              <input ref={fileInput} type="file" multiple accept=".pdf,.docx,.txt,.md" className="hidden-input" aria-label="Выбрать файлы лекций" onChange={e=>e.target.files && upload(e.target.files)}/>
+              {tab === "files" ? <div className={`dropzone ${dragging ? "dragging" : ""} ${materials.length ? "has-files" : ""}`} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);upload(e.dataTransfer.files);}}>
+                {materials.length === 0 ? <><PaperArt/><h3>{loading ? "Читаем твой материал…" : "Перетащи лекцию сюда"}</h3><p>или выбери файл на устройстве</p><button className="button primary upload-btn" disabled={loading} onClick={()=>fileInput.current?.click()}>{loading ? <Loader2 className="spin" size={17}/> : <Plus size={17}/>}Выбрать файл</button><div className="file-types"><span>PDF</span><span>DOCX</span><span>TXT</span><i>до 10 МБ</i></div></> : <><div className="uploaded-label"><CheckCircle2 size={18}/>Материалы готовы</div><div className="uploaded-files">{materials.map((m,i)=><div key={`${m.name}-${i}`} className="uploaded-file"><span className="file-icon"><FileText size={20}/></span><div><strong>{m.name}</strong><span>{wordCount(m.text).toLocaleString("ru-RU")} слов</span></div><button className="icon-btn" aria-label={`Убрать ${m.name}`} disabled={loading} onClick={()=>setMaterials(materials.filter((_,j)=>i!==j))}><X size={17}/></button></div>)}</div><button className="button secondary" disabled={loading || materials.length >=5} onClick={()=>fileInput.current?.click()}>{loading ? <Loader2 size={16} className="spin"/> : <Plus size={16}/>}Добавить файл</button><p className="small">До 5 файлов в одном наборе</p></>}
+              </div> : <div className="text-input-wrap"><label className="sr-only" htmlFor="lecture-text">Текст лекции</label><textarea id="lecture-text" value={text} maxLength={120000} onChange={e=>setText(e.target.value)} placeholder={"Вставь сюда лекцию, конспект или главу учебника…\n\nЛучше всего подходят полные предложения с фактами и определениями."}/><div className="text-counter"><span>От 80 символов</span><span>{text.length.toLocaleString("ru-RU")} / 120 000</span></div></div>}
+              <div className="privacy-note"><ShieldCheck size={15}/><span>Файлы обрабатываются в браузере и остаются у тебя.</span></div>
+              <div className="demo-row"><span className="demo-icon"><BookOpen size={18}/></span><div><strong>Сначала посмотреть, как это работает?</strong><p>Короткая лекция «Как работает память»</p></div><button disabled={generating} onClick={()=>generate(true)}>Попробовать<ArrowRight size={16}/></button></div>
+            </section>
+            <section className="card settings-card"><div className="card-heading"><div className="step-num">02</div><h2>Настрой вопросы</h2><Settings2 size={18} className="settings-icon"/></div>
+              <label className="field-label" htmlFor="set-title">Название набора <span>необязательно</span></label><input id="set-title" className="text-field" placeholder="Например, Основы психологии" value={title} maxLength={100} onChange={e=>setTitle(e.target.value)}/>
+              <div className="setting-group"><div className="field-label">Количество вопросов</div><div className="count-options" role="group" aria-label="Количество вопросов">{[5,10,15,20].map(n=><button key={n} aria-pressed={count===n} className={count===n ? "selected" : ""} onClick={()=>setCount(n)}>{n}</button>)}</div></div>
+              <div className="setting-group"><div className="field-label">Уровень сложности</div><div className="difficulty-options" role="group" aria-label="Сложность">{(["easy","medium","hard"] as Difficulty[]).map((d,i)=><button key={d} className={difficulty===d?"selected":""} aria-pressed={difficulty===d} onClick={()=>setDifficulty(d)}><span className={`level-bars bars-${i+1}`}><i/><i/><i/></span>{["Базовый","Средний","Высокий"][i]}</button>)}</div><p className="setting-hint">{difficulty==="easy" ? "Узнавай термины и вспоминай точные факты." : difficulty==="medium" ? "Вспоминай определения и ключевые понятия." : "Объясняй определения своими словами."}</p></div>
+              <div className="setting-group"><div className="field-label">Формат вопросов</div><div className="format-options" role="radiogroup" aria-label="Формат вопросов">{([{value:"mixed",label:"Смешанный",desc:"Понемногу каждого формата",icon:Layers3},{value:"choice",label:"С вариантами ответа",desc:"Выбери подходящий вариант",icon:CheckCircle2},{value:"open",label:"Открытые вопросы",desc:"Вспомни и ответь самостоятельно",icon:FileText}] as const).map(item=><button role="radio" aria-checked={format===item.value} key={item.value} className={format===item.value?"selected":""} onClick={()=>setFormat(item.value)}><item.icon size={18}/><span><strong>{item.label}</strong><small>{item.desc}</small></span><i className="radio-dot"/></button>)}</div></div>
+              <button className="button primary generate-btn" disabled={!ready} onClick={()=>generate()}>{generating ? <Loader2 size={18} className="spin"/> : <Sparkles size={18}/>} {generating ? "Создаём вопросы…" : "Создать вопросы"}<ArrowRight size={17}/></button><p className="generate-hint">{totalWords ? `${totalWords.toLocaleString("ru-RU")} слов · всё готово для старта` : "Добавь материал, чтобы начать"}</p>
+            </section>
+          </div>
+          {error && <div className="error-message" role="alert"><CircleHelp size={18}/>{error}<button className="icon-btn" aria-label="Закрыть ошибку" onClick={()=>setError("")}><X size={16}/></button></div>}
+          <div className="benefits"><div><span><Target size={20}/></span><div><strong>Только по твоей лекции</strong><p>Вопросы основаны на твоём материале</p></div></div><div><span><BookOpen size={20}/></span><div><strong>Ответы с источником</strong><p>Всегда можно вернуться к нужной мысли</p></div></div><div><span><TrendingUp size={20}/></span><div><strong>Учёба в своём темпе</strong><p>Тесты, карточки и история результатов</p></div></div></div>
+          {sets.length > 0 && <section className="recent-section"><div className="section-heading"><h2>Продолжить изучение</h2><button className="text-button" onClick={()=>navigate("library")}>Все материалы<ArrowRight size={15}/></button></div><div className="recent-grid">{sets.slice(0,3).map(s=><SetCard key={s.id} set={s} open={()=>openSet(s)}/>)}</div></section>}
+          <footer className="page-footer"><span>Сложное становится понятнее.</span><span>Один вопрос за раз <Sparkles size={12}/></span></footer>
+        </>}
+
+        {view === "library" && <><div className="view-heading"><div><div className="eyebrow">ТВОЯ БИБЛИОТЕКА</div><h1>Мои материалы<span className="heading-dot">.</span></h1><p>Возвращайся к лекциям, когда захочешь повторить.</p></div><button className="button primary" onClick={()=>navigate("create")}><Plus size={18}/>Новый набор</button></div><label className="search-field"><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Найти по названию" aria-label="Найти материал"/></label>{sets.length ? <div className="library-grid">{sets.filter(s=>s.title.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(s=><SetCard key={s.id} set={s} open={()=>openSet(s)} remove={()=>setDeleteId(s.id)}/>)}{!sets.some(s=>s.title.toLocaleLowerCase().includes(search.toLocaleLowerCase())) && <div className="empty-search">Ничего не найдено. Попробуй другое название.</div>}</div> : <EmptyState icon={<FolderOpen size={35}/>} title="Здесь будут твои лекции" text="Загрузи первый материал — и набор вопросов появится в библиотеке." action={()=>navigate("create")} label="Добавить материал"/>}<p className="storage-footnote"><LockKeyhole size={14}/>Последние 20 наборов хранятся в этом браузере. Скачивай важные вопросы перед очисткой данных.</p></>}
+
+        {view === "progress" && <><div className="view-heading"><div><div className="eyebrow">КАЖДЫЙ ШАГ СЧИТАЕТСЯ</div><h1>Мой прогресс<span className="heading-dot">.</span></h1><p>Маленькие занятия складываются в большой результат.</p></div></div><div className="stats-grid"><Stat icon={<BookOpen/>} value={String(attempts.length)} label="Завершено тренировок"/><Stat icon={<Target/>} value={totalAnswered ? `${Math.round(totalCorrect/totalAnswered*100)}%` : "—"} label="Правильных ответов"/><Stat icon={<Zap/>} value={String(activeDays)} label="Дней с практикой"/></div>{attempts.length ? <section className="card history-card"><h2>История тренировок</h2>{attempts.map(a=><div className="history-row" key={a.id}><span className="file-icon"><CheckCircle2 size={20}/></span><div><strong>{a.title}</strong><span>{new Date(a.at).toLocaleString("ru-RU",{day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"})}</span></div><span className="score-pill">{a.correct} / {a.total}</span><strong className="history-percent">{Math.round(a.correct/a.total*100)}%</strong></div>)}</section> : <EmptyState icon={<TrendingUp size={35}/>} title="Первый результат — впереди" text="Пройди самопроверку по любой лекции, чтобы увидеть свой прогресс." action={()=>navigate(sets.length ? "library" : "create")} label={sets.length ? "Выбрать лекцию" : "Создать первый набор"}/>}<p className="storage-footnote">Открытые вопросы оцениваются тобой после сравнения с ответом из лекции.</p></>}
+
+        {view === "set" && active && <><button className="back-link" onClick={()=>navigate("library")}><ArrowLeft size={17}/>Мои материалы</button><div className="view-heading set-heading"><div><div className="eyebrow">ТВОЙ НАБОР ГОТОВ</div><h1>{active.title}</h1><p>{active.questions.length} вопросов <span>·</span> {difficultyNames[active.difficulty]} <span>·</span> {active.words.toLocaleString("ru-RU")} слов в материале</p></div><button className="button secondary" onClick={download}><ArrowDownToLine size={17}/>Скачать</button></div><div className="study-banner"><span className="study-banner-icon"><GraduationCap size={32}/></span><div><h2>Знания крепнут, когда их вспоминаешь.</h2><p>Пройди тест или повтори материал с карточками.</p></div><button className="button light" onClick={()=>navigate("cards")}><Layers3 size={17}/>Карточки</button><button className="button primary" onClick={()=>navigate("quiz")}>Проверить себя<ArrowRight size={17}/></button></div><div className="section-heading question-list-heading"><h2>Вопросы по материалу</h2><label className="toggle-label"><input type="checkbox" checked={showAnswers} onChange={e=>setShowAnswers(e.target.checked)}/><span className="switch"/>Показать ответы</label></div><div className="question-list">{active.questions.map((q,i)=><QuestionPreview key={q.id} q={q} index={i} show={showAnswers}/>)}</div></>}
+        {view === "quiz" && active && <Quiz key={active.id} set={active} onBack={()=>navigate("set")} onFinish={finish}/>}
+        {view === "cards" && active && <Flashcards set={active} onBack={()=>navigate("set")}/>}
+      </main>
+    </div>
+    {notice && <div className="toast" role="status"><CheckCircle2 size={19}/><span>{notice}</span><button className="icon-btn" aria-label="Закрыть уведомление" onClick={()=>setNotice("")}><X size={16}/></button></div>}
+    {help && <div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e=>e.stopPropagation()}><button className="icon-btn modal-close" aria-label="Закрыть справку" autoFocus onClick={()=>setHelp(false)}><X size={21}/></button><span className="modal-symbol"><Sparkles size={26}/></span><h2 id="help-title">От лекции к пониманию</h2><ol className="help-steps"><li><strong>Добавь материал</strong><p>Загрузи PDF с текстовым слоем, DOCX, TXT или MD. Можно просто вставить текст. Сканированные страницы сначала нужно распознать.</p></li><li><strong>Создай вопросы</strong><p>Сайт выделяет определения и факты, чтобы составить вопросы на узнавание и воспроизведение. Если материала мало, вопросов будет меньше.</p></li><li><strong>Проверь себя</strong><p>Выбери ответ или напиши свой. В открытых вопросах сравни ответ с лекцией и оцени себя. Повторяй материал с карточками.</p></li></ol><div className="help-note"><ShieldCheck size={18}/><span>Работает без платного ИИ и API-ключей. Обработка идёт в браузере. Наборы и результаты сохраняются на этом устройстве.</span></div><button className="button primary full-width" onClick={()=>setHelp(false)}>Всё понятно<ArrowRight size={16}/></button></section></div>}
+    {deleteId && <div className="modal-backdrop"><section className="modal small-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Удалить этот набор?</h2><p>Вопросы и связанные результаты исчезнут с этого устройства.</p><div className="modal-actions"><button className="button secondary" autoFocus onClick={()=>setDeleteId(null)}>Отмена</button><button className="button danger" onClick={deleteSet}>Удалить</button></div></section></div>}
+  </div>;
+}
+
+function SetCard({set,open,remove}:{set:StudySet;open:()=>void;remove?:()=>void}) {
+  return <article className="set-card"><button className="set-card-main" onClick={open}><div className="set-card-top"><span className="file-icon"><FileText size={22}/></span><span className="set-date">{dateLabel(set.createdAt)}</span></div><h3>{set.title}</h3><p>{set.questions.length} вопросов <span>·</span> {difficultyNames[set.difficulty]}</p><div className="set-card-bottom"><span>Открыть набор</span><ArrowUpRightIcon/></div></button>{remove && <button className="icon-btn delete-set" aria-label={`Удалить ${set.title}`} onClick={remove}><Trash2 size={16}/></button>}</article>;
+}
+function ArrowUpRightIcon(){return <svg width="18" height="18" fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>;}
+function EmptyState({icon,title,text,action,label}:{icon:React.ReactNode;title:string;text:string;action:()=>void;label:string}) {return <div className="empty-state"><span className="empty-icon">{icon}</span><h2>{title}</h2><p>{text}</p><button className="button primary" onClick={action}><Plus size={17}/>{label}</button></div>;}
+function Stat({icon,value,label}:{icon:React.ReactNode;value:string;label:string}) {return <div className="card stat-card"><span>{icon}</span><strong>{value}</strong><p>{label}</p></div>;}
+function QuestionPreview({q,index,show}:{q:Question;index:number;show:boolean}) {return <article className="card question-preview"><div className="question-meta"><span>ВОПРОС {String(index+1).padStart(2,"0")}</span><span className="kind-badge">{q.kind === "choice" ? "С вариантами" : "Открытый"}</span></div><h3>{q.prompt}</h3>{q.kind === "choice" && <div className="preview-options">{q.options.map((o,j)=><div key={o} className={show && o === q.answer ? "correct" : ""}><span>{"АБВГ"[j]}</span>{o}{show && o===q.answer && <Check size={16}/>}</div>)}</div>}{show && <div className="answer-box"><strong>Ответ: {q.answer}</strong><blockquote>{q.source}</blockquote><span><FileText size={13}/>{q.sourceName}</span></div>}</article>;}
+
+function Quiz({set,onBack,onFinish}:{set:StudySet;onBack:()=>void;onFinish:(correct:number,total:number)=>void}) {
+  const [index,setIndex]=useState(0); const [selected,setSelected]=useState(""); const [revealed,setRevealed]=useState(false); const [results,setResults]=useState<boolean[]>([]); const [done,setDone]=useState(false); const [retry,setRetry]=useState(0);
+  const q=set.questions[index]; const correct=results.filter(Boolean).length;
+  function next(ok:boolean){const updated=[...results,ok];setResults(updated);if(index===set.questions.length-1){setDone(true);onFinish(updated.filter(Boolean).length,updated.length);}else{setIndex(index+1);setSelected("");setRevealed(false);}window.scrollTo({top:0,behavior:"smooth"});}
+  if(done) return <div className="quiz-container"><button className="back-link" onClick={onBack}><ArrowLeft size={17}/>К вопросам</button><div className="card result-card"><span className="result-icon"><GraduationCap size={43}/></span><div className="eyebrow">ЕЩЁ ОДИН ШАГ ВПЕРЁД</div><h1>{correct===set.questions.length?"Отличная работа!":"Тренировка завершена!"}</h1><p>{set.title}</p><div className="result-score">{correct}<span> / {set.questions.length}</span></div><p>правильных ответов · {Math.round(correct/set.questions.length*100)}%</p><div className="result-track"><span style={{width:`${correct/set.questions.length*100}%`}}/></div><p className="result-note">{correct===set.questions.length ? "Все ответы верные. Вернись к материалу через пару дней." : "Ошибки показывают, что стоит повторить. Ответы и фрагменты лекции — ниже."}</p><div className="result-actions"><button className="button secondary" onClick={onBack}>Все вопросы</button><button className="button primary" onClick={()=>{setIndex(0);setSelected("");setRevealed(false);setResults([]);setDone(false);setRetry(retry+1);}}>Пройти ещё раз<ArrowRight size={16}/></button></div></div>{set.questions.filter((_,i)=>!results[i]).map((question,i)=><QuestionPreview key={question.id} q={question} index={set.questions.indexOf(question)} show/>)}</div>;
+  return <div className="quiz-container" key={retry}><button className="back-link" onClick={onBack}><ArrowLeft size={17}/>Выйти к вопросам</button><div className="quiz-heading"><div><div className="eyebrow">ПРОВЕРЯЕМ ЗНАНИЯ</div><h1>{set.title}</h1></div><span>{index+1} <i>/ {set.questions.length}</i></span></div><div className="quiz-progress"><span style={{width:`${index/set.questions.length*100}%`}}/></div><section className="card quiz-card"><div className="question-meta"><span>ВОПРОС {String(index+1).padStart(2,"0")}</span><span className="kind-badge">{q.kind==="choice"?"Выбери один ответ":"Ответь своими словами"}</span></div><h2>{q.prompt}</h2>{q.kind==="choice" ? <div className="quiz-options">{q.options.map((o,j)=><button key={o} disabled={revealed} className={`${selected===o?"selected":""} ${revealed && o===q.answer?"correct":""} ${revealed && selected===o && o!==q.answer?"wrong":""}`} onClick={()=>setSelected(o)}><span>{"АБВГ"[j]}</span><strong>{o}</strong>{revealed && o===q.answer && <CheckCircle2 size={20}/>}</button>)}</div> : <textarea className="quiz-textarea" aria-label="Твой ответ" placeholder="Попробуй вспомнить без подсказки…" value={selected} disabled={revealed} onChange={e=>setSelected(e.target.value)}/>}{revealed && <div className={`quiz-feedback ${q.kind==="choice" && selected!==q.answer ? "feedback-wrong":""}`} aria-live="polite"><strong>{q.kind==="open" ? "Сравни свой ответ с лекцией" : selected===q.answer ? "Верно! Так держать." : "Этот момент стоит повторить"}</strong><p><b>Ответ:</b> {q.answer}</p><details><summary>Фрагмент лекции</summary><blockquote>{q.source}</blockquote><small>{q.sourceName}</small></details></div>}<div className="quiz-actions">{!revealed ? <><span><LockKeyhole size={14}/>Ответ появится после проверки</span><button className="button primary" disabled={!selected.trim()} onClick={()=>setRevealed(true)}>{q.kind==="choice"?"Проверить ответ":"Посмотреть ответ"}<ArrowRight size={17}/></button></> : q.kind==="choice" ? <><span>{index+1===set.questions.length?"Последний вопрос — готово!":"Продолжай в своём темпе"}</span><button className="button primary" onClick={()=>next(selected===q.answer)}>{index+1===set.questions.length?"Мой результат":"Следующий вопрос"}<ArrowRight size={17}/></button></> : <><span>Оцени свой ответ:</span><div className="self-grade"><button className="button secondary" onClick={()=>next(false)}>Нужно повторить</button><button className="button primary" onClick={()=>next(true)}><Check size={16}/>Я ответил верно</button></div></>}</div></section><p className="quiz-bottom-note">Не страшно ошибиться. Главное — попробовать вспомнить.</p></div>;
+}
+
+function Flashcards({set,onBack}:{set:StudySet;onBack:()=>void}) {
+  const [index,setIndex]=useState(0); const [flipped,setFlipped]=useState(false); const q=set.questions[index];
+  function move(step:number){setIndex((index+step+set.questions.length)%set.questions.length);setFlipped(false);}
+  return <div className="flashcard-container"><button className="back-link" onClick={onBack}><ArrowLeft size={17}/>К вопросам</button><div className="eyebrow">ПОВТОРЯЕМ ГЛАВНОЕ</div><h1>{set.title}</h1><p>Сначала вспомни ответ, затем переверни карточку.</p><button className={`flashcard ${flipped?"flipped":""}`} onClick={()=>setFlipped(!flipped)} aria-label={flipped?"Показать вопрос":"Показать ответ"}><span className="flashcard-label">{flipped?"ОТВЕТ ИЗ ЛЕКЦИИ":"ВОПРОС"}<Layers3 size={18}/></span><strong>{flipped?q.answer:q.prompt}</strong>{flipped && <p>{q.source}</p>}<span className="flashcard-hint">Нажми, чтобы {flipped?"вернуться к вопросу":"увидеть ответ"}<span>↻</span></span></button><div className="flashcard-controls"><button className="button secondary" aria-label="Предыдущая карточка" onClick={()=>move(-1)}><ChevronLeft size={20}/></button><span>{index+1} <i>/ {set.questions.length}</i></span><button className="button secondary" aria-label="Следующая карточка" onClick={()=>move(1)}><ChevronRight size={20}/></button></div></div>;
+}
