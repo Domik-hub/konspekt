@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { generateKeyPair, SignJWT } from 'jose';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -125,7 +125,18 @@ test('stream failures after deltas, incomplete streams and quota errors cannot b
   assert.equal((await readCompletedResponse(stream([delta,complete]))).status,'completed');
 });
 
-async function temporary(run){const prefix=join(tmpdir(),'konspekt-tests-');const directory=await mkdtemp(prefix);try{await run(directory);}finally{if(!resolve(directory).startsWith(resolve(prefix)))throw new Error('Unexpected test path');await rm(directory,{recursive:true,force:true});}}
+async function temporary(run) {
+  // Windows runners can expose TEMP through an 8.3 alias or a junction.
+  // Give the storage fixture a canonical path, as required by its link guard.
+  const prefix = join(await realpath(tmpdir()), 'konspekt-tests-');
+  const directory = await mkdtemp(prefix);
+  try {
+    await run(directory);
+  } finally {
+    if (!resolve(directory).startsWith(resolve(prefix))) throw new Error('Unexpected test path');
+    await rm(directory, {recursive: true, force: true});
+  }
+}
 test('credential storage survives restart; Windows stores ciphertext and stable host ID',()=>temporary(async directory=>{
   const store=await createLocalStore(directory);const data={version:1,activeId:'fixture',accounts:[{id:'fixture',accessToken:'fixture-only-sensitive-value',name:'Қазақша Русский'}]};await store.save(data);
   const reopened=await createLocalStore(directory);assert.equal(store.hostId,reopened.hostId);assert.deepEqual(await reopened.load(),data);
