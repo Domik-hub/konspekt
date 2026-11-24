@@ -1,6 +1,7 @@
 export type QuestionKind = "choice" | "open";
 export type Format = "mixed" | "choice" | "open";
 export type Difficulty = "easy" | "medium" | "hard";
+export type Language = "ru" | "kk" | "en";
 export type Question = {
   id: string;
   kind: QuestionKind;
@@ -9,6 +10,9 @@ export type Question = {
   options: string[];
   source: string;
   sourceName: string;
+  rubric?: string[];
+  explanation?: string;
+  generatedBy?: "ai" | "local";
 };
 export type Material = { name: string; text: string };
 export type StudySet = {
@@ -19,6 +23,9 @@ export type StudySet = {
   words: number;
   difficulty: Difficulty;
   sourceNames: string[];
+  generatedBy?: "ai" | "local";
+  language?: Language;
+  optionOrderVersion?: 1;
 };
 export type Attempt = { id: string; setId: string; title: string; at: string; correct: number; total: number };
 
